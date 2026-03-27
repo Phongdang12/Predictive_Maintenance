@@ -1,7 +1,35 @@
-version: '3'
 services:
-  emqx-enterprise:
-    image: emqx/emqx-enterprise:5.0.4
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - 9000:9000
+      - 9001:9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    profiles: ["bronze", "train"]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-01-17T23-25-50Z
+    container_name: minio-init
+    depends_on:
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 minioadmin minioadmin123; do
+          sleep 2
+        done
+        mc mb -p local/lakehouse || true
+        mc mb -p local/checkpoints || true
+        echo "MinIO buckets are ready"
+    profiles: ["bronze", "train"]
+
+  emqx:
+    image: emqx/emqx:6.1.1
     container_name: emqx
     healthcheck:
       test: ["CMD", "emqx", "ping"]
@@ -18,88 +46,134 @@ services:
       EMQX_DASHBOARD__BOOTSTRAP_USERS_FILE: '"/opt/emqx/data/api_secret"'
     depends_on:
       - kafka
+    profiles: ["core"]
 
-  emqx-exporter:
-    image: emqx/emqx-exporter
-    container_name: emqx-exporter
-    ports:
-      - 8085:8085
-    command:
-      - '--emqx.nodes=emqx-enterprise:18083'
-      - '--emqx.auth-username=76668f8a2003d597'
-      - '--emqx.auth-password=CRCDB6lxxzN58e5HoD82llBC0Erg1TVZIAUsdTjPU7N'
-    depends_on:
-      emqx-enterprise:
-        condition: service_healthy
-
-  mqttx-simulate:
-    image: emqx/mqttx-cli:v1.9.3
-    container_name: mqttx-simulate
+  mqtt-kafka-bridge:
+    image: python:3.11-slim
+    container_name: mqtt-kafka-bridge
+    working_dir: /app
     command:
       - /bin/sh
       - -c
       - |
-        mqttx simulate -sc tesla -c 10 -h emqx-enterprise
-    depends_on:
-      emqx-enterprise:
-        condition: service_healthy
-
-  mqttx:
-    image: emqx/mqttx-cli:v1.9.3
-    container_name: mqttx
-    command:
-      - /bin/sh
-      - -c
-      - |
-        mqttx sub -t 'mqttx/simulate/#' -v -h emqx-enterprise
-    depends_on:
-      emqx-enterprise:
-        condition: service_healthy
-
-  prometheus:
-    image: prom/prometheus
-    container_name: prometheus
-    ports:
-      - 9090:9090
+        pip install --no-cache-dir -r simulator/requirements.txt && \
+        python -u simulator/mqtt_to_kafka_bridge.py \
+          --mqtt-broker emqx \
+          --mqtt-port 1883 \
+          --mqtt-topic factory/pdm/fd001/raw \
+          --kafka-bootstrap kafka:9092 \
+          --raw-topic pdm.fd001.raw \
+          --dlq-topic pdm.fd001.raw.dlq
     volumes:
-      - $PWD/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml
-
-  grafana:
-    image: grafana/grafana:9.3.2
-    container_name: grafana
-    ports:
-      - 3000:3000
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=public
-    volumes:
-      - $PWD/emqx-exporter/config/grafana-template/EMQX5-enterprise:/grafana-dashboard-emqx5-ee
-      - $PWD/grafana-provisioning/dashboard.yaml:/etc/grafana/provisioning/dashboards/dashboard.yaml
-      - $PWD/grafana-provisioning/datasource.yaml:/etc/grafana/provisioning/datasources/datasource.yaml
-
+      - ./:/app
+    restart: unless-stopped
+    depends_on:
+      emqx:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    profiles: ["ingest"]
 
   kafka:
-    image: wurstmeister/kafka:2.12-2.3.0
+    image: apache/kafka:3.7.1
     container_name: kafka
     ports:
       - 9092:9092
     environment:
-      KAFKA_LISTENERS: INSIDE://0.0.0.0:9093,OUTSIDE://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9093,OUTSIDE://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CREATE_TOPICS: "my-vehicles:1:1"
-    depends_on:
-      - zookeeper
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 4
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    profiles: ["core"]
 
-  zookeeper:
-    image: wurstmeister/zookeeper
-    container_name: zookeeper
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
     ports:
-      - 2181:2181
+      - 8080:8080
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    depends_on:
+      - kafka
+    profiles: ["core"]
 
-networks:
-  emqx-net:
-    name: emqx-net
+  bronze-telemetry:
+    image: apache/spark:3.5.1
+    container_name: bronze-telemetry
+    working_dir: /app
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        mkdir -p /tmp/.ivy2/cache /tmp/.ivy2/jars && \
+        /opt/spark/bin/spark-submit \
+          --conf spark.jars.ivy=/tmp/.ivy2 \
+          --packages io.delta:delta-spark_2.12:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 \
+          /app/spark/stream_bronze_telemetry.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      BRONZE_RAW_TOPIC: pdm.fd001.raw
+      BRONZE_DLQ_TOPIC: pdm.fd001.raw.dlq
+      KAFKA_STARTING_OFFSETS: earliest
+      KAFKA_FAIL_ON_DATA_LOSS: "false"
+      KAFKA_MAX_OFFSETS_PER_TRIGGER: "5000"
+      BRONZE_TRIGGER_INTERVAL: 10 seconds
+      BRONZE_RAW_DELTA_PATH: s3a://lakehouse/bronze/telemetry_raw/
+      BRONZE_DLQ_DELTA_PATH: s3a://lakehouse/bronze/telemetry_dlq/
+      BRONZE_RAW_CHECKPOINT_PATH: s3a://checkpoints/bronze/telemetry_raw/
+      BRONZE_DLQ_CHECKPOINT_PATH: s3a://checkpoints/bronze/telemetry_dlq/
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      SPARK_LOG_LEVEL: WARN
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    depends_on:
+      - kafka
+      - minio
+      - minio-init
+    profiles: ["bronze"]
+
+  train-silver-gold:
+    image: apache/spark:3.5.1
+    container_name: train-silver-gold
+    working_dir: /app
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        mkdir -p /tmp/.ivy2/cache /tmp/.ivy2/jars && \
+        /opt/spark/bin/spark-submit \
+          --conf spark.jars.ivy=/tmp/.ivy2 \
+          --packages io.delta:delta-spark_2.12:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+          /app/spark/build_train_silver_gold.py
+    environment:
+      TRAIN_INPUT_CSV_PATH: /app/Data/train_history.csv
+      TRAIN_SILVER_DELTA_PATH: s3a://lakehouse/silver/train_history/
+      TRAIN_GOLD_DELTA_PATH: s3a://lakehouse/gold/train_rul/
+      TRAIN_RUL_CLIP: "125"
+      TRAIN_SEQUENCE_LENGTH: "30"
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      SPARK_LOG_LEVEL: WARN
+    volumes:
+      - ./:/app
+    depends_on:
+      - minio
+      - minio-init
+    profiles: ["train"]
