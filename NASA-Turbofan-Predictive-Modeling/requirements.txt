@@ -1,0 +1,6 @@
+# Minimal dependencies for MinIO Gold -> LSTM training
+numpy>=1.26,<3
+pandas>=2.2,<3
+scikit-learn>=1.4,<2
+tensorflow>=2.16,<3
+deltalake>=0.20,<1
