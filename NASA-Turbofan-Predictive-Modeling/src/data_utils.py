@@ -75,11 +75,9 @@ class CMAPSSData:
             self.target_col,
             *[f's_{i}' for i in range(1, 22)],
         ]
-        if 'split' in df.columns:
-            keep_cols.append('split')
         df = df[keep_cols].copy()
 
-        for c in [col for col in df.columns if col != 'split']:
+        for c in df.columns:
             df[c] = pd.to_numeric(df[c], errors='coerce')
 
         df = df.dropna().sort_values([self.id_col, self.cycle_col]).reset_index(drop=True)
@@ -87,8 +85,6 @@ class CMAPSSData:
 
     def _process_minio_gold_data(self):
         train_df = self._load_minio_gold_dataframe()
-        if 'split' in train_df.columns:
-            train_df = train_df.drop(columns=['split'])
 
         if train_df.empty:
             raise ValueError("Gold Delta table produced empty train set.")

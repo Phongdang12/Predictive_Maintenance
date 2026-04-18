@@ -1,0 +1,288 @@
+{
+  "id": null,
+  "uid": "pdm-overview",
+  "title": "PDM Gold Overview",
+  "tags": ["pdm", "gold", "realtime", "ops"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 11,
+  "refresh": "5s",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total Machines",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "targets": [{ "format": "table", "rawSql": "SELECT total_machines FROM gold.v_overview_kpis;", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Avg Predicted RUL",
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "auto" },
+      "targets": [{ "format": "table", "rawSql": "SELECT ROUND(avg_predicted_rul::numeric,1) AS value FROM gold.v_overview_kpis;", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Min Predicted RUL",
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": { "colorMode": "background", "graphMode": "area", "textMode": "auto" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "orange", "value": 20   },
+              { "color": "yellow", "value": 50   },
+              { "color": "green",  "value": 100  }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "targets": [{ "format": "table", "rawSql": "SELECT ROUND(min_predicted_rul::numeric,1) AS value FROM gold.v_overview_kpis;", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Warning Machines",
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "orange", "mode": "fixed" }
+        },
+        "overrides": []
+      },
+      "targets": [{ "format": "table", "rawSql": "SELECT COALESCE(SUM(CASE WHEN alert_level='Warning' THEN machine_count ELSE 0 END),0) AS value FROM gold.v_alert_level_counts;", "refId": "A" }]
+    },
+    {
+      "type": "stat",
+      "title": "Critical Machines",
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": { "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" }
+        },
+        "overrides": []
+      },
+      "targets": [{ "format": "table", "rawSql": "SELECT COALESCE(SUM(CASE WHEN alert_level='Critical' THEN machine_count ELSE 0 END),0) AS value FROM gold.v_alert_level_counts;", "refId": "A" }]
+    },
+    {
+      "type": "barchart",
+      "title": "Alert Level Distribution",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": {
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 80 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 1    },
+              { "color": "orange", "value": 2    },
+              { "color": "red",    "value": 3    }
+            ]
+          },
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": []
+      },
+      "targets": [{
+        "format": "table",
+        "rawSql": "SELECT alert_level, machine_count FROM gold.v_alert_level_counts ORDER BY CASE alert_level WHEN 'Normal' THEN 1 WHEN 'Watch' THEN 2 WHEN 'Warning' THEN 3 WHEN 'Critical' THEN 4 ELSE 5 END;",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "bargauge",
+      "title": "Top 10 Machines by Risk Score",
+      "description": "Each bar = one machine. Red = highest risk.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "/^risk_score$/",
+          "values": true
+        },
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 50   },
+              { "color": "orange", "value": 70   },
+              { "color": "red",    "value": 85   }
+            ]
+          },
+          "mappings": [],
+          "unit": "short",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "targets": [{
+        "format": "table",
+        "rawSql": "SELECT unit_nr::text AS unit_nr, ROUND(risk_score::numeric,1) AS risk_score FROM gold.v_top_risk ORDER BY risk_score DESC LIMIT 10;",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "bargauge",
+      "title": "Top 10 Low RUL Machines",
+      "description": "Each bar = one machine. Shorter bar = less RUL remaining.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "/^predicted_rul$/",
+          "values": true
+        },
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "orange", "value": 30   },
+              { "color": "yellow", "value": 60   },
+              { "color": "green",  "value": 100  }
+            ]
+          },
+          "mappings": [],
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [{
+        "format": "table",
+        "rawSql": "SELECT unit_nr::text AS unit_nr, ROUND(predicted_rul::numeric,1) AS predicted_rul FROM gold.v_low_rul ORDER BY predicted_rul ASC LIMIT 10;",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Warning / Critical Trend",
+      "description": "Warning and Critical alert count per 1-minute bucket — always shows the last 2 hours relative to now, regardless of dashboard time range.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "timeFrom": "2h",
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "warning_count" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "critical_count" }, "properties": [{ "id": "color", "value": { "fixedColor": "red",    "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [{
+        "format": "time_series",
+        "rawSql": "WITH buckets AS (SELECT to_timestamp(floor(EXTRACT(epoch FROM t)/60)*60) AS ts FROM generate_series(NOW()-INTERVAL '24 hours', NOW(), INTERVAL '1 minute') t), counts AS (SELECT to_timestamp(floor(EXTRACT(epoch FROM alert_time::timestamptz)/60)*60) AS bucket, SUM(CASE WHEN alert_level='Warning' THEN 1 ELSE 0 END)::bigint AS warning_count, SUM(CASE WHEN alert_level='Critical' THEN 1 ELSE 0 END)::bigint AS critical_count FROM gold.gold_alert_history WHERE alert_time::timestamptz >= NOW()-INTERVAL '24 hours' GROUP BY 1) SELECT b.ts AS time, COALESCE(c.warning_count,0) AS warning_count, COALESCE(c.critical_count,0) AS critical_count FROM buckets b LEFT JOIN counts c ON b.ts=c.bucket ORDER BY b.ts;",
+        "refId": "A"
+      }]
+    },
+    {
+      "type": "table",
+      "title": "Investigate Entry Point  ↗ click unit_nr to open Superset",
+      "description": "Sorted by risk descending. Click unit_nr to open Superset Machine Investigation, then select the machine in the left filter panel.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "postgres", "uid": "gold_pg" },
+      "options": {
+        "sortBy": [{ "desc": true, "displayName": "risk_score" }],
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "unit_nr" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open Machine Investigation (unit ${__value.raw}) in Superset",
+                    "url": "http://localhost:8088/superset/dashboard/pdm-machine-detail/",
+                    "targetBlank": true
+                  }
+                ]
+              },
+              { "id": "custom.displayMode", "value": "color-text" },
+              { "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "alert_level" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "Normal":   { "color": "green",  "index": 0 } }, "type": "value" },
+                  { "options": { "Watch":    { "color": "blue",   "index": 1 } }, "type": "value" },
+                  { "options": { "Warning":  { "color": "orange", "index": 2 } }, "type": "value" },
+                  { "options": { "Critical": { "color": "red",    "index": 3 } }, "type": "value" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [{
+        "format": "table",
+        "rawSql": "SELECT p.unit_nr, p.window_end_cycle, ROUND(p.predicted_rul::numeric,1) AS predicted_rul, ROUND(a.risk_score::numeric,3) AS risk_score, a.alert_level, a.updated_at FROM gold.gold_prediction_current p JOIN gold.gold_alert_current a USING (unit_nr) ORDER BY a.risk_score DESC, p.predicted_rul ASC LIMIT 20;",
+        "refId": "A"
+      }]
+    }
+  ]
+}

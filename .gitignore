@@ -1,5 +1,6 @@
 .DS_Store
 .vscode
+.venv/
 bootstrap_api_key.conf
 __pycache__/
 *.py[cod]

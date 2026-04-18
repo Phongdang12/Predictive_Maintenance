@@ -144,11 +144,15 @@ def build_dlq_message(error_type: str, error_message: str, raw_payload: str) -> 
 def main() -> int:
     args = parse_args()
 
+    print("Bridge: connecting to Kafka (metadata)...", flush=True)
     producer = KafkaProducer(
         bootstrap_servers=args.kafka_bootstrap,
         acks="all",
         retries=5,
+        request_timeout_ms=30_000,
+        api_version_auto_timeout_ms=10_000,
     )
+    print("Bridge: Kafka producer ready", flush=True)
 
     running = {"value": True}
 
@@ -159,10 +163,11 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop_handler)
 
     client_id = f"pdm-bridge-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    # MQTT 3.1.1 avoids rare broker/client quirks with MQTT v5 + Paho 2.x callbacks.
     mqtt_client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=client_id,
-        protocol=mqtt.MQTTv5,
+        protocol=mqtt.MQTTv311,
     )
 
     def send_raw(unit_nr: str, raw_payload: str) -> None:
@@ -180,13 +185,23 @@ def main() -> int:
             value=json.dumps(dlq_payload, ensure_ascii=True).encode("utf-8"),
         )
 
-    def on_connect(_client, _userdata, _flags, reason_code, _properties):
-        rc_value = getattr(reason_code, "value", reason_code)
-        if rc_value == 0:
-            mqtt_client.subscribe(args.mqtt_topic, qos=1)
-            print(f"Connected MQTT and subscribed to topic={args.mqtt_topic}")
+    def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
+        if isinstance(reason_code, int):
+            ok = reason_code == 0
         else:
-            print(f"ERROR: MQTT connect failed reason_code={rc_value}", file=sys.stderr)
+            ok = not reason_code.is_failure
+        if not ok:
+            print(
+                f"ERROR: MQTT connect failed reason_code={reason_code!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        mqtt_client.subscribe(args.mqtt_topic, qos=1)
+        print(
+            f"Connected MQTT and subscribed to topic={args.mqtt_topic}",
+            flush=True,
+        )
 
     def on_message(_client, _userdata, msg):
         raw_payload = msg.payload.decode("utf-8", errors="replace")
@@ -208,13 +223,18 @@ def main() -> int:
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message
 
+    print(
+        f"Bridge: connecting MQTT to {args.mqtt_broker}:{args.mqtt_port} ...",
+        flush=True,
+    )
     mqtt_client.connect(args.mqtt_broker, args.mqtt_port, keepalive=60)
     mqtt_client.loop_start()
 
     print(
         "Bridge started "
         f"mqtt={args.mqtt_broker}:{args.mqtt_port}/{args.mqtt_topic} "
-        f"kafka={args.kafka_bootstrap} raw={args.raw_topic} dlq={args.dlq_topic}"
+        f"kafka={args.kafka_bootstrap} raw={args.raw_topic} dlq={args.dlq_topic}",
+        flush=True,
     )
 
     try:

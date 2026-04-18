@@ -1,0 +1,11 @@
+.git
+.cursor
+mcps
+agent-transcripts
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/*.pyc
+terminals
+NASA-Turbofan-Predictive-Modeling/.venv

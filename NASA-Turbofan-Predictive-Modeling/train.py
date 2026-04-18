@@ -26,15 +26,14 @@ def main():
         model = create_lstm_model(input_shape)
         
         callbacks = [
-            EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
-            ModelCheckpoint(model_path, save_best_only=True)
+            EarlyStopping(monitor='loss', patience=5, restore_best_weights=True),
+            ModelCheckpoint(model_path, save_best_only=True, monitor='loss')
         ]
         
         model.fit(
             X_train, y_train,
             epochs=config.EPOCHS,
             batch_size=config.BATCH_SIZE,
-            validation_split=0.1,
             callbacks=callbacks,
             verbose=1
         )

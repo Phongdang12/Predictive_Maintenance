@@ -146,6 +146,26 @@ def create_spark_session(cfg: JobConfig) -> SparkSession:
     return spark
 
 
+def path_exists(spark: SparkSession, path: str) -> bool:
+    try:
+        jvm = spark.sparkContext._jvm
+        hadoop_conf = spark.sparkContext._jsc.hadoopConfiguration()
+        uri = jvm.java.net.URI(path)
+        fs = jvm.org.apache.hadoop.fs.FileSystem.get(uri, hadoop_conf)
+        return fs.exists(jvm.org.apache.hadoop.fs.Path(path))
+    except Exception:
+        return False
+
+
+def safe_delta_count(spark: SparkSession, path: str) -> int:
+    if not path_exists(spark, path):
+        return 0
+    try:
+        return spark.read.format("delta").load(path).count()
+    except Exception:
+        return 0
+
+
 def read_kafka_stream(spark: SparkSession, cfg: JobConfig, topic: str) -> DataFrame:
     return (
         spark.readStream.format("kafka")
@@ -304,16 +324,37 @@ def build_dlq_bronze_df(df_kafka_dlq: DataFrame) -> DataFrame:
     )
 
 
-def start_delta_sink(df: DataFrame, output_path: str, checkpoint_path: str, trigger_interval: str, query_name: str):
-    LOGGER.info("Starting query=%s output=%s checkpoint=%s", query_name, output_path, checkpoint_path)
+def start_delta_sink(
+    df: DataFrame,
+    output_path: str,
+    checkpoint_path: str,
+    trigger_interval: str,
+    query_name: str,
+):
+    LOGGER.info(
+        "Starting query=%s output=%s checkpoint=%s",
+        query_name,
+        output_path,
+        checkpoint_path,
+    )
+
+    def _write_and_log(batch_df: DataFrame, batch_id: int) -> None:
+        if not batch_df.take(1):
+            LOGGER.info("[%s] batch=%d new_rows=0 total_rows=%d", query_name, batch_id, safe_delta_count(batch_df.sparkSession, output_path))
+            return
+
+        new_rows = batch_df.count()
+        batch_df.write.format("delta").mode("append").option("mergeSchema", "true").save(output_path)
+        total_rows = safe_delta_count(batch_df.sparkSession, output_path)
+        LOGGER.info("[%s] batch=%d new_rows=%d total_rows=%d", query_name, batch_id, new_rows, total_rows)
+
     return (
-        df.writeStream.format("delta")
-        .outputMode("append")
+        df.writeStream
         .option("checkpointLocation", checkpoint_path)
-        .option("mergeSchema", "true")
         .trigger(processingTime=trigger_interval)
         .queryName(query_name)
-        .start(output_path)
+        .foreachBatch(_write_and_log)
+        .start()
     )
 
 

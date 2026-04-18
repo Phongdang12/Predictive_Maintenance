@@ -17,7 +17,7 @@ DROP_COLS = ['setting_3', 's_1', 's_5', 's_10', 's_16', 's_18', 's_19']
 # Preprocessing Config
 RUL_CLIP = 125
 SMOOTHING_ALPHA = 0.1  # Exponential Weighted Moving Average
-SEQUENCE_LENGTH = 10   # Window size
+SEQUENCE_LENGTH = 25   # Window size
 
 # Model Config
 EPOCHS = 30

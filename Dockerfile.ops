@@ -1,0 +1,28 @@
+FROM python:3.11-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PYSPARK_PYTHON=/usr/local/bin/python
+ENV PYSPARK_DRIVER_PYTHON=/usr/local/bin/python
+ENV TF_CPP_MIN_LOG_LEVEL=2
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    procps \
+    tini \
+    openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    python -m pip install --no-cache-dir \
+      "pyspark==3.5.1" \
+      "tensorflow-cpu==2.20.0" \
+      "keras==3.14.0" \
+      "numpy==1.26.4" \
+      "pandas==2.2.2" \
+      "scikit-learn==1.5.1"
+
+WORKDIR /app
+
+ENTRYPOINT ["/usr/bin/tini", "--"]

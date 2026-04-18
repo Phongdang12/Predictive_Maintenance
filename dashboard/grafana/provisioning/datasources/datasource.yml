@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: Gold Warehouse
+    uid: gold_pg
+    type: postgres
+    access: proxy
+    url: dashboard-db:5432
+    database: pdm_dashboard
+    user: pdm
+    secureJsonData:
+      password: pdm
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1500
+      timescaledb: false
+      connMaxLifetime: 14400
+      maxIdleConns: 10
+      maxOpenConns: 30

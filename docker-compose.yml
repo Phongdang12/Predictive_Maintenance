@@ -1,7 +1,8 @@
+name: predictive_maintenance
+
 services:
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
-    container_name: minio
     command: server /data --console-address ":9001"
     ports:
       - 9000:9000
@@ -13,7 +14,6 @@ services:
 
   minio-init:
     image: minio/mc:RELEASE.2025-01-17T23-25-50Z
-    container_name: minio-init
     depends_on:
       - minio
     entrypoint:
@@ -30,14 +30,13 @@ services:
 
   emqx:
     image: emqx/emqx:6.1.1
-    container_name: emqx
     healthcheck:
       test: ["CMD", "emqx", "ping"]
       interval: 10s
       timeout: 10s
       retries: 12
     ports:
-      - 1883:1883
+      - 18831:1883
       - 18083:18083
     volumes:
       - $PWD/emqx/cluster.hocon:/opt/emqx/data/configs/cluster.hocon
@@ -50,8 +49,9 @@ services:
 
   mqtt-kafka-bridge:
     image: python:3.11-slim
-    container_name: mqtt-kafka-bridge
     working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
     command:
       - /bin/sh
       - -c
@@ -76,7 +76,6 @@ services:
 
   kafka:
     image: apache/kafka:3.7.1
-    container_name: kafka
     ports:
       - 9092:9092
     environment:
@@ -99,7 +98,6 @@ services:
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    container_name: kafka-ui
     ports:
       - 8080:8080
     environment:
@@ -112,7 +110,6 @@ services:
 
   bronze-telemetry:
     image: apache/spark:3.5.1
-    container_name: bronze-telemetry
     working_dir: /app
     command:
       - /bin/bash
@@ -148,9 +145,53 @@ services:
       - minio-init
     profiles: ["bronze"]
 
+  silver-gold-inference-alert:
+    build:
+      context: .
+      dockerfile: Dockerfile.ops
+    user: "0"
+    working_dir: /app
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        mkdir -p /tmp/.ivy2/cache /tmp/.ivy2/jars && \
+        spark-submit \
+          --conf spark.jars.ivy=/tmp/.ivy2 \
+          --conf spark.driver.memory=2g \
+          --conf spark.sql.shuffle.partitions=4 \
+          --conf spark.default.parallelism=4 \
+          --conf spark.sql.streaming.forceDeleteTempCheckpointLocation=true \
+          --packages io.delta:delta-spark_2.12:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4 \
+          /app/spark/stream_silver_gold_inference_alert.py
+    environment:
+      BRONZE_RAW_DELTA_PATH: s3a://lakehouse/bronze/telemetry_raw/
+      SILVER_STREAM_CLEAN_PATH: s3a://lakehouse/silver/stream_clean/
+      SILVER_STREAM_CHECKPOINT_PATH: s3a://checkpoints/silver/stream_clean/
+      SILVER_STREAM_TRIGGER_INTERVAL: 15 seconds
+      TRAIN_HISTORY_CSV_PATH: /app/Data/train_history.csv
+      MODEL_PATH: /app/NASA-Turbofan-Predictive-Modeling/model_GOLD_MINIO.keras
+      GOLD_PREDICTION_HISTORY_PATH: s3a://lakehouse/gold/prediction_history/
+      GOLD_PREDICTION_CURRENT_PATH: s3a://lakehouse/gold/prediction_current/
+      GOLD_ALERT_HISTORY_PATH: s3a://lakehouse/gold/alert_history/
+      GOLD_ALERT_CURRENT_PATH: s3a://lakehouse/gold/alert_current/
+      GOLD_PIPELINE_QUALITY_PATH: s3a://lakehouse/gold/pipeline_quality/
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      SPARK_LOG_LEVEL: WARN
+      TF_CPP_MIN_LOG_LEVEL: "2"
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    depends_on:
+      - bronze-telemetry
+      - minio
+      - minio-init
+    profiles: ["ops"]
+
   train-silver-gold:
     image: apache/spark:3.5.1
-    container_name: train-silver-gold
     working_dir: /app
     command:
       - /bin/bash
@@ -177,3 +218,121 @@ services:
       - minio
       - minio-init
     profiles: ["train"]
+
+  dashboard-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: pdm_dashboard
+      POSTGRES_USER: pdm
+      POSTGRES_PASSWORD: pdm
+    ports:
+      - 5433:5432
+    volumes:
+      - dashboard-pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+  gold-sync:
+    image: python:3.11-slim
+    working_dir: /app
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        pip install --no-cache-dir -r dashboard/gold_sync/requirements.txt && \
+        python -u dashboard/gold_sync/sync_gold_to_warehouse.py
+    environment:
+      WAREHOUSE_DSN: postgresql+psycopg2://pdm:pdm@dashboard-db:5432/pdm_dashboard
+      MINIO_S3_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_USE_SSL: "false"
+      MINIO_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      SYNC_INTERVAL_SEC: "10"
+      INITIAL_SLEEP_SEC: "10"
+      LOG_LEVEL: INFO
+    volumes:
+      - ./:/app
+    depends_on:
+      - dashboard-db
+      - minio
+      - minio-init
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+  superset:
+    image: apache/superset:4.1.1
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        pip install --no-cache-dir psycopg2-binary==2.9.10 && \
+        superset run -h 0.0.0.0 -p 8088
+    environment:
+      SUPERSET_SECRET_KEY: pdm-superset-secret
+      SUPERSET_LOAD_EXAMPLES: "no"
+      SUPERSET_ADMIN_USERNAME: admin
+      SUPERSET_ADMIN_PASSWORD: admin
+      SUPERSET_ADMIN_FIRSTNAME: PDM
+      SUPERSET_ADMIN_LASTNAME: Admin
+      SUPERSET_ADMIN_EMAIL: admin@local
+    ports:
+      - 8088:8088
+    volumes:
+      - superset_home:/app/superset_home
+      - ./dashboard/superset:/app/dashboard/superset
+    depends_on:
+      - dashboard-db
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+  superset-init:
+    image: apache/superset:4.1.1
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        pip install --no-cache-dir psycopg2-binary==2.9.10 && \
+        sed -i 's/\r$//' /app/dashboard/superset/init_superset.sh && \
+        bash /app/dashboard/superset/init_superset.sh && \
+        python /app/dashboard/superset/bootstrap_dashboard.py && \
+        python /app/dashboard/superset/bootstrap_charts.py
+    environment:
+      SUPERSET_SECRET_KEY: pdm-superset-secret
+      SUPERSET_LOAD_EXAMPLES: "no"
+      SUPERSET_ADMIN_USERNAME: admin
+      SUPERSET_ADMIN_PASSWORD: admin
+      SUPERSET_ADMIN_FIRSTNAME: PDM
+      SUPERSET_ADMIN_LASTNAME: Admin
+      SUPERSET_ADMIN_EMAIL: admin@local
+    volumes:
+      - superset_home:/app/superset_home
+      - ./dashboard/superset:/app/dashboard/superset
+    depends_on:
+      - superset
+      - dashboard-db
+    profiles: ["dashboard"]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - 3000:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./dashboard/grafana/provisioning:/etc/grafana/provisioning
+      - ./dashboard/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - dashboard-db
+    restart: unless-stopped
+    profiles: ["dashboard"]
+
+
+volumes:
+  dashboard-pg-data:
+  superset_home:
+  grafana-data:
+
